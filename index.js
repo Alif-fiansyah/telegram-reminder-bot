@@ -1,83 +1,130 @@
 import { Telegraf, Markup } from 'telegraf';
 import dotenv from 'dotenv';
+import Database from 'better-sqlite3';
+import dayjs from 'dayjs';
+import cron from 'node-cron';
 import fs from 'fs';
 import path from 'path';
-import cron from 'node-cron';
 
 dotenv.config();
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const DB_FILE = path.resolve('tasks.json');
 
-// Helper: baca database lokal
-function loadTasks() {
-  if (!fs.existsSync(DB_FILE)) return [];
-  try {
-    return JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
-  } catch {
-    return [];
+// ==========================================
+// 1. INISIALISASI DATABASE (SQLite)
+// ==========================================
+const db = new Database('database.sqlite');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    chat_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    deadline TEXT NOT NULL,
+    done INTEGER DEFAULT 0,
+    notified INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
+// Helper: Smart Date Parser
+function parseSmartDate(input) {
+  const cleanInput = input.toLowerCase().trim();
+  const now = dayjs();
+
+  if (cleanInput === 'hari-ini' || cleanInput === 'today') {
+    return now.format('YYYY-MM-DD');
   }
+  if (cleanInput === 'besok' || cleanInput === 'tomorrow') {
+    return now.add(1, 'day').format('YYYY-MM-DD');
+  }
+  if (cleanInput === 'lusa') {
+    return now.add(2, 'day').format('YYYY-MM-DD');
+  }
+
+  // Format: 3hari / 5hari / 2minggu
+  const matchRelative = cleanInput.match(/^(\d+)(hari|minggu)$/);
+  if (matchRelative) {
+    const amount = parseInt(matchRelative[1], 10);
+    const unit = matchRelative[2] === 'hari' ? 'day' : 'week';
+    return now.add(amount, unit).format('YYYY-MM-DD');
+  }
+
+  // Cek jika formatnya sudah YYYY-MM-DD atau valid date string
+  const parsed = dayjs(input);
+  if (parsed.isValid() && input.length >= 8) {
+    return parsed.format('YYYY-MM-DD');
+  }
+
+  return null;
 }
 
-// Helper: simpan database lokal
-function saveTasks(tasks) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(tasks, null, 2));
-}
-
-// Helper: format tanggal hari ini (YYYY-MM-DD)
-function getTodayString() {
-  return new Date().toISOString().split('T')[0];
-}
+// ==========================================
+// 2. COMMANDS & HANDLERS
+// ==========================================
 
 // Command /start
 bot.start((ctx) => {
   ctx.reply(
-    'Halo! Aku bot pengingat tugas kuliah.\n\n' +
-    'Perintah yang bisa kamu pakai:\n' +
-    '1. /tambah <deadline> <nama tugas>\n' +
-    '   Contoh: /tambah 2026-09-25 Laporan Praktikum Jarkom\n' +
-    '2. /list - Melihat daftar tugas aktif beserta tombol aksi interaktif\n' +
-    '3. /selesai <id> - Menandai tugas selesai secara manual'
+    '👋 Halo! Aku bot pengingat tugas kuliah (SQLite + Smart Date Edition).\n\n' +
+    '📌 *Panduan Perintah:*\n' +
+    '1. `/tambah <deadline> <nama tugas>`\n' +
+    '   Contoh Natural: `/tambah besok Praktikum Jarkom`\n' +
+    '   Contoh Relatif: `/tambah 3hari Laporan Akhir`\n' +
+    '   Contoh Tanggal: `/tambah 2026-09-30 Ujian Tengah Semester`\n\n' +
+    '2. `/list` - Melihat daftar tugas aktif dengan tombol aksi\n' +
+    '3. `/export` - Mengunduh rekapan semua tugas dalam format CSV spreadsheet\n' +
+    '4. `/selesai <id>` - Tandai tugas selesai via teks',
+    { parse_mode: 'Markdown' }
   );
 });
 
 // Command /tambah <deadline> <nama tugas>
 bot.command('tambah', (ctx) => {
-  const text = ctx.message.text.split(' ');
-  if (text.length < 3) {
-    return ctx.reply('Format salah!\nContoh: /tambah 2026-09-25 Laporan Jarkom');
+  const parts = ctx.message.text.split(' ');
+  if (parts.length < 3) {
+    return ctx.reply(
+      '⚠️ *Format salah!*\n\nContoh:\n• `/tambah besok Kuis Jaringan`\n• `/tambah 2026-09-28 Revisi Makalah`',
+      { parse_mode: 'Markdown' }
+    );
   }
 
-  const deadline = text[1];
-  const taskName = text.slice(2).join(' ');
+  const rawDeadline = parts[1];
+  const taskName = parts.slice(2).join(' ');
+  const deadline = parseSmartDate(rawDeadline);
+
+  if (!deadline) {
+    return ctx.reply(
+      '❌ Tanggal tidak valid! Gunakan kata kunci seperti `besok`, `lusa`, `3hari`, atau format `YYYY-MM-DD`.'
+    );
+  }
+
+  const taskId = Math.floor(1000 + Math.random() * 9000).toString();
   const chatId = ctx.chat.id;
-  const tasks = loadTasks();
 
-  const newTask = {
-    id: Date.now().toString().slice(-4),
-    chatId: chatId,
-    name: taskName,
-    deadline: deadline,
-    done: false,
-    notified: false
-  };
+  const stmt = db.prepare(`
+    INSERT INTO tasks (id, chat_id, name, deadline, done, notified)
+    VALUES (?, ?, ?, ?, 0, 0)
+  `);
+  stmt.run(taskId, chatId, taskName, deadline);
 
-  tasks.push(newTask);
-  saveTasks(tasks);
-
-  ctx.reply(`[OK] Tugas berhasil dicatat!\nID: ${newTask.id}\nTugas: ${newTask.name}\nDeadline:${newTask.deadline}`);
+  ctx.reply(
+    `✅ *Tugas Berhasil Dicatat!*\n\n🔑 *ID:* \`${taskId}\`\n📝 *Tugas:* ${taskName}\n📅 *Deadline:* ${deadline}`,
+    { parse_mode: 'Markdown' }
+  );
 });
 
-// Command /list (Menampilkan daftar dengan Inline Buttons)
+// Command /list
 bot.command('list', (ctx) => {
   const chatId = ctx.chat.id;
-  const tasks = loadTasks().filter((t) => t.chatId === chatId && !t.done);
+  const stmt = db.prepare('SELECT * FROM tasks WHERE chat_id = ? AND done = 0 ORDER BY deadline ASC');
+  const tasks = stmt.all(chatId);
 
   if (tasks.length === 0) {
-    return ctx.reply('Belum ada tugas yang tercatat! Santai dulu.');
+    return ctx.reply('🎉 Tidak ada tugas aktif. Waktunya santai!');
   }
 
-  ctx.reply('📌 *Daftar Tugas Aktif:*', { parse_mode: 'Markdown' });
+  ctx.reply('📌 *Daftar Tugas Aktif Kamu:*', { parse_mode: 'Markdown' });
 
   tasks.forEach((t) => {
     ctx.reply(
@@ -93,93 +140,133 @@ bot.command('list', (ctx) => {
   });
 });
 
-// Aksi ketika tombol "Selesai ✅" diklik
+// Command /export (Ekspor CSV file)
+bot.command('export', async (ctx) => {
+  const chatId = ctx.chat.id;
+  const stmt = db.prepare('SELECT id, name, deadline, done, created_at FROM tasks WHERE chat_id = ? ORDER BY created_at DESC');
+  const tasks = stmt.all(chatId);
+
+  if (tasks.length === 0) {
+    return ctx.reply('Belum ada data tugas untuk diekspor!');
+  }
+
+  // Format CSV
+  let csvContent = 'ID,Nama Tugas,Deadline,Status,Tanggal Dibuat\n';
+  tasks.forEach((t) => {
+    const status = t.done ? 'SELESAI' : 'BELUM SELESAI';
+    const escapedName = `"${t.name.replace(/"/g, '""')}"`;
+    csvContent += `${t.id},${escapedName},${t.deadline},${status},${t.created_at}\n`;
+  });
+
+  const filePath = path.resolve(`rekap_tugas_${chatId}.csv`);
+  fs.writeFileSync(filePath, csvContent, 'utf-8');
+
+  try {
+    await ctx.replyWithDocument({
+      source: filePath,
+      filename: `rekap_tugas_${dayjs().format('YYYYMMDD')}.csv`
+    }, {
+      caption: '📊 Berikut rekapan semua tugas kuliahmu dalam format spreadsheet (CSV).'
+    });
+  } catch (err) {
+    ctx.reply('Gagal mengirim file ekspor.');
+  } finally {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath); // Bersihkan file temp lokal
+    }
+  }
+});
+
+// Aksi tombol "Selesai ✅"
 bot.action(/^done_(.+)$/, (ctx) => {
   const taskId = ctx.match[1];
   const chatId = ctx.chat.id;
-  const tasks = loadTasks();
 
-  const task = tasks.find((t) => t.id === taskId && t.chatId === chatId);
-  if (!task) return ctx.answerCbQuery('Tugas tidak ditemukan!');
+  const stmt = db.prepare('UPDATE tasks SET done = 1 WHERE id = ? AND chat_id = ?');
+  const result = stmt.run(taskId, chatId);
 
-  task.done = true;
-  saveTasks(tasks);
+  if (result.changes === 0) {
+    return ctx.answerCbQuery('Tugas tidak ditemukan!');
+  }
 
-  ctx.answerCbQuery('Tugas selesai!');
-  ctx.editMessageText(`✅ *Selesai:* ~${task.name}~ (${task.deadline})`, {
+  ctx.answerCbQuery('Tugas ditandai selesai!');
+  ctx.editMessageText('✅ *Tugas telah diselesaikan! Bagus sekali.*', {
     parse_mode: 'Markdown'
   });
 });
 
-// Aksi ketika tombol "Hapus 🗑️" diklik
+// Aksi tombol "Hapus 🗑️"
 bot.action(/^del_(.+)$/, (ctx) => {
   const taskId = ctx.match[1];
   const chatId = ctx.chat.id;
-  let tasks = loadTasks();
 
-  const taskExists = tasks.some((t) => t.id === taskId && t.chatId === chatId);
-  if (!taskExists) return ctx.answerCbQuery('Tugas tidak ditemukan!');
+  const stmt = db.prepare('DELETE FROM tasks WHERE id = ? AND chat_id = ?');
+  const result = stmt.run(taskId, chatId);
 
-  tasks = tasks.filter((t) => !(t.id === taskId && t.chatId === chatId));
-  saveTasks(tasks);
+  if (result.changes === 0) {
+    return ctx.answerCbQuery('Tugas tidak ditemukan!');
+  }
 
   ctx.answerCbQuery('Tugas dihapus!');
-  ctx.editMessageText('🗑️ *Tugas telah dihapus dari daftar.*', {
+  ctx.editMessageText('🗑️ *Tugas telah dihapus dari database.*', {
     parse_mode: 'Markdown'
   });
 });
 
-// Command /selesai <id> (Tetap disediakan untuk opsi manual teks)
+// Command /selesai <id> (Manual)
 bot.command('selesai', (ctx) => {
-  const args = ctx.message.text.split(' ');
-  const taskId = args[1];
+  const parts = ctx.message.text.split(' ');
+  const taskId = parts[1];
   const chatId = ctx.chat.id;
 
-  if (!taskId) return ctx.reply('Sebutkan ID tugasnya. Contoh: /selesai 1234');
+  if (!taskId) return ctx.reply('Format: /selesai <id>');
 
-  const tasks = loadTasks();
-  const task = tasks.find((t) => t.id === taskId && t.chatId === chatId);
+  const stmt = db.prepare('UPDATE tasks SET done = 1 WHERE id = ? AND chat_id = ?');
+  const result = stmt.run(taskId, chatId);
 
-  if (!task) return ctx.reply('ID tugas tidak ditemukan atau bukan milikmu.');
+  if (result.changes === 0) {
+    return ctx.reply('ID tugas tidak ditemukan.');
+  }
 
-  task.done = true;
-  saveTasks(tasks);
-
-  ctx.reply(`Mantap! Tugas "${task.name}" sudah ditandai selesai ✅`);
+  ctx.reply(`Mantap! Tugas ID ${taskId} berhasil ditandai selesai ✅`);
 });
 
 // ==========================================
-// BACKGROUND WORKER: Pengingat Otomatis (Cron)
-// Dijalankan setiap hari pukul 08.00 pagi WIB
+// 3. BACKGROUND CRON NOTIFICATION
 // ==========================================
 cron.schedule('0 8 * * *', () => {
-  const tasks = loadTasks();
-  const today = getTodayString();
+  const today = dayjs().format('YYYY-MM-DD');
+  const stmt = db.prepare('SELECT * FROM tasks WHERE done = 0 AND deadline = ? AND notified = 0');
+  const pendingTasks = stmt.all(today);
 
-  tasks.forEach((task) => {
-    if (!task.done && task.deadline === today && !task.notified) {
-      bot.telegram.sendMessage(
-        task.chatId,
-        `⚠️ *PENGINGAT DEADLINE HARI INI!*\n\nTugas: *${task.name}*\nDeadline: Hari ini (${task.deadline})\n\nSegera tuntaskan dan klik tombol di bawah:`,
-        {
-          parse_mode: 'Markdown',
-          ...Markup.inlineKeyboard([
-            Markup.button.callback('Tandai Selesai ✅', `done_${task.id}`)
-          ])
-        }
-      ).catch((err) => console.error(`Gagal mengirim reminder ke ${task.chatId}:`, err));
+  const updateStmt = db.prepare('UPDATE tasks SET notified = 1 WHERE id = ?');
 
-      task.notified = true;
-    }
+  pendingTasks.forEach((t) => {
+    bot.telegram.sendMessage(
+      t.chat_id,
+      `⚠️ *PENGINGAT DEADLINE HARI INI!*\n\n📝 *Tugas:* ${t.name}\n📅 *Deadline:* ${t.deadline}\n\nTuntaskan sekarang dan klik tombol di bawah:`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          Markup.button.callback('Tandai Selesai ✅', `done_${t.id}`)
+        ])
+      }
+    ).catch((err) => console.error(`Gagal mengirim reminder ke ${t.chat_id}:`, err));
+
+    updateStmt.run(t.id);
   });
-
-  saveTasks(tasks);
 });
 
-// Jalankan Bot
+// Jalankan bot
 bot.launch();
-console.log('Bot Telegram aktif dengan fitur Inline Keyboard & Cron Scheduler...');
+console.log('Bot Telegram aktif (SQLite + Smart Date + CSV Exporter + Cron Scheduler)...');
 
 // Handle shutdown
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+process.once('SIGINT', () => {
+  db.close();
+  bot.stop('SIGINT');
+});
+process.once('SIGTERM', () => {
+  db.close();
+  bot.stop('SIGTERM');
+});
