@@ -1,22 +1,21 @@
 # Telegram Task Reminder Bot
 
-A lightweight task management and automated reminder Telegram bot built with Node.js and Telegraf framework. Designed to help students record academic deadlines, interact with responsive inline buttons, and automatically receive deadline alerts directly on Telegram.
+A production-ready, lightweight task management and automated reminder Telegram bot built with Node.js, Telegraf framework, and SQLite. Designed to help students record deadlines using natural language, interact with dynamic inline buttons, receive automated deadline notifications, and export task recaps to spreadsheet files.
 
 ## Features
 
-- **Automated Deadline Reminders**: Runs a background cron scheduler to automatically notify users when a task deadline arrives.
-- **Interactive Inline Buttons**: Easily mark tasks as done or delete them in one tap directly from the chat list using Telegram inline keyboards.
-- **Multi-User Isolation**: Tasks are bound to specific Telegram chat IDs, ensuring personal reminders remain private per user.
-- **Command-Based Task Entry**: Quickly log assignments with specific deadlines and descriptions via `/tambah`.
-- **Assignment Overview**: View all pending tasks with auto-generated 4-digit unique IDs via `/list`.
-- **Status Toggling & Deletion**: Mark assignments as completed or remove unwanted tasks either via inline buttons or `/selesai <id>`.
-- **Local Persistence**: Stores task records locally in JSON format without database setup overhead.
-- **Environment Isolation**: Securely manages bot credentials using `dotenv`.
+- **Relational Persistence (SQLite)**: Powered by `better-sqlite3` for fast, ACID-compliant local database operations without the overhead of external database servers.
+- **Smart Natural Date Parsing**: Supports natural language deadlines like `besok`, `lusa`, relative offsets (`3hari`, `2minggu`), alongside traditional ISO dates (`YYYY-MM-DD`).
+- **Interactive Inline Buttons**: Update task statuses or remove entries in one tap directly within Telegram chat messages.
+- **Automated Deadline Reminders**: Background cron worker runs daily to push notifications for tasks reaching their deadline.
+- **CSV Data Export**: Easily export all pending and completed assignments into a structured CSV file via `/export`.
+- **Multi-User Isolation**: Automatic user and chat scoping ensuring private task isolation per Telegram user.
+- **Environment Isolation**: Securely manages bot authentication tokens with `dotenv`.
 
 ## Prerequisites
 
 - Node.js: Version 18.0.0 or higher.
-- Telegram Account: To generate a bot token via `@BotFather`.
+- Telegram Account: To obtain a bot token via `@BotFather`.
 
 ## Installation & Setup
 
@@ -45,27 +44,29 @@ A lightweight task management and automated reminder Telegram bot built with Nod
 
 ## Usage Examples
 
-### Commands
+### Commands & Interactions
 
-| Command | Description | Example |
+| Command / Action | Description | Example / Usage |
 | :--- | :--- | :--- |
-| `/start` | Display welcome guide and command manual | `/start` |
-| `/tambah` | Add a new task with a deadline | `/tambah 2026-09-20 Tugas Sistem Operasi` |
-| `/list` | List all unfinished assignments | `/list` |
-| `[ Selesai ✅ ]` |Tap inline button below task message to mark done | `One-tap button interaction` |
-| `[ Hapus 🗑️ ]` | Tap inline button below task message to delete task | `One-tap button interaction` |
-| `/selesai` | Mark a task as completed by its ID | `/selesai 9184` |
+| `/start` | Display welcome guide and command instructions | `/start` |
+| `/tambah` | Add tasks using natural dates or ISO format | `/tambah besok Laporan Jarkom`<br>`/tambah 3hari Kuis OS`<br>`/tambah 2026-09-30 UTS` |
+| `/list` | Show pending tasks sorted by closest deadline | `/list` |
+| `[ Selesai ✅ ]` | Mark task as finished directly from message button | Single tap |
+| `[ Hapus 🗑️ ]` | Remove task entry from database | Single tap |
+| `/export` | Generate and download assignments history as a CSV file | `/export` |
+| `/selesai <id>` | Alternative manual command to complete tasks | `/selesai 4821` |
 
 ---
 
 ## Tech Stack
 
 - **Runtime**: Node.js (ES Modules)
-- **Library**: Telegraf.js
+- **Framework**: Telegraf.js
+- **Database**: SQLite
+- **Date Handling**: Day.js
 - **Scheduler**:node-cron
 - **Configuration**: Dotenv
-- **Storage**: Local JSON File System
-
+  
 ---
 
 ## License
