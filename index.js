@@ -36,8 +36,8 @@ bot.start((ctx) => {
     'Perintah yang bisa kamu pakai:\n' +
     '1. /tambah <deadline> <nama tugas>\n' +
     '   Contoh: /tambah 2026-09-25 Laporan Praktikum Jarkom\n' +
-    '2. /list - Melihat daftar tugas aktifmu\n' +
-    '3. /selesai <id> - Menandai tugas sudah beres'
+    '2. /list - Melihat daftar tugas aktif beserta tombol aksi interaktif\n' +
+    '3. /selesai <id> - Menandai tugas selesai secara manual'
   );
 });
 
@@ -55,38 +55,81 @@ bot.command('tambah', (ctx) => {
 
   const newTask = {
     id: Date.now().toString().slice(-4),
-    chatId: chatId, // Isolasi per chat/user
+    chatId: chatId,
     name: taskName,
     deadline: deadline,
     done: false,
-    notified: false // Flag agar reminder tidak spam berkali-kali
+    notified: false
   };
 
   tasks.push(newTask);
   saveTasks(tasks);
 
-  ctx.reply(`[OK] Tugas berhasil dicatat!\nID: ${newTask.id}\nTugas: ${newTask.name}\nDeadline: ${newTask.deadline}`);
+  ctx.reply(`[OK] Tugas berhasil dicatat!\nID: ${newTask.id}\nTugas: ${newTask.name}\nDeadline:${newTask.deadline}`);
 });
 
-// Command /list
+// Command /list (Menampilkan daftar dengan Inline Buttons)
 bot.command('list', (ctx) => {
   const chatId = ctx.chat.id;
-  // Hanya ambil tugas milik user yang sedang chat
   const tasks = loadTasks().filter((t) => t.chatId === chatId && !t.done);
 
   if (tasks.length === 0) {
     return ctx.reply('Belum ada tugas yang tercatat! Santai dulu.');
   }
 
-  let replyText = '📌 *Daftar Tugas Belum Selesai:*\n========================\n';
-  tasks.forEach((t) => {
-    replyText += `• [ID: \`${t.id}\`] 📅 *${t.deadline}*\n  📝 ${t.name}\n\n`;
-  });
+  ctx.reply('📌 *Daftar Tugas Aktif:*', { parse_mode: 'Markdown' });
 
-  ctx.replyWithMarkdown(replyText);
+  tasks.forEach((t) => {
+    ctx.reply(
+      `📅 *Deadline:* ${t.deadline}\n📝 *Tugas:* ${t.name}\n🔑 *ID:* \`${t.id}\``,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          Markup.button.callback('Selesai ✅', `done_${t.id}`),
+          Markup.button.callback('Hapus 🗑️', `del_${t.id}`)
+        ])
+      }
+    );
+  });
 });
 
-// Command /selesai <id>
+// Aksi ketika tombol "Selesai ✅" diklik
+bot.action(/^done_(.+)$/, (ctx) => {
+  const taskId = ctx.match[1];
+  const chatId = ctx.chat.id;
+  const tasks = loadTasks();
+
+  const task = tasks.find((t) => t.id === taskId && t.chatId === chatId);
+  if (!task) return ctx.answerCbQuery('Tugas tidak ditemukan!');
+
+  task.done = true;
+  saveTasks(tasks);
+
+  ctx.answerCbQuery('Tugas selesai!');
+  ctx.editMessageText(`✅ *Selesai:* ~${task.name}~ (${task.deadline})`, {
+    parse_mode: 'Markdown'
+  });
+});
+
+// Aksi ketika tombol "Hapus 🗑️" diklik
+bot.action(/^del_(.+)$/, (ctx) => {
+  const taskId = ctx.match[1];
+  const chatId = ctx.chat.id;
+  let tasks = loadTasks();
+
+  const taskExists = tasks.some((t) => t.id === taskId && t.chatId === chatId);
+  if (!taskExists) return ctx.answerCbQuery('Tugas tidak ditemukan!');
+
+  tasks = tasks.filter((t) => !(t.id === taskId && t.chatId === chatId));
+  saveTasks(tasks);
+
+  ctx.answerCbQuery('Tugas dihapus!');
+  ctx.editMessageText('🗑️ *Tugas telah dihapus dari daftar.*', {
+    parse_mode: 'Markdown'
+  });
+});
+
+// Command /selesai <id> (Tetap disediakan untuk opsi manual teks)
 bot.command('selesai', (ctx) => {
   const args = ctx.message.text.split(' ');
   const taskId = args[1];
@@ -114,12 +157,16 @@ cron.schedule('0 8 * * *', () => {
   const today = getTodayString();
 
   tasks.forEach((task) => {
-    // Ingatkan jika belum selesai dan deadline-nya hari ini
     if (!task.done && task.deadline === today && !task.notified) {
       bot.telegram.sendMessage(
         task.chatId,
-        `⚠️ *PENGINGAT DEADLINE HARI INI!*\n\nTugas: *${task.name}*\nDeadline: Hari ini (${task.deadline})\n\nSegera tuntaskan dan ketik:\n/selesai ${task.id}`,
-        { parse_mode: 'Markdown' }
+        `⚠️ *PENGINGAT DEADLINE HARI INI!*\n\nTugas: *${task.name}*\nDeadline: Hari ini (${task.deadline})\n\nSegera tuntaskan dan klik tombol di bawah:`,
+        {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            Markup.button.callback('Tandai Selesai ✅', `done_${task.id}`)
+          ])
+        }
       ).catch((err) => console.error(`Gagal mengirim reminder ke ${task.chatId}:`, err));
 
       task.notified = true;
@@ -131,7 +178,7 @@ cron.schedule('0 8 * * *', () => {
 
 // Jalankan Bot
 bot.launch();
-console.log('Bot Telegram aktif dengan Cron Scheduler (Auto-reminder jam 08.00)...');
+console.log('Bot Telegram aktif dengan fitur Inline Keyboard & Cron Scheduler...');
 
 // Handle shutdown
 process.once('SIGINT', () => bot.stop('SIGINT'));
